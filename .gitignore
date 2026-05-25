@@ -1,0 +1,23 @@
+# Bytecode
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual environment
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Data / outputs
+pred/
+pred_e/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+*.log
