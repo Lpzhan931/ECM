@@ -5,7 +5,6 @@ import torch.nn.functional as F
 from ecm.method.ecm_forward.ecm_mistral import enable_mistral_ecm_attention
 from ecm.method.ecm_forward.ecm_llama import enable_llama_pos_shift_ecm_attention_442
 from ecm.method.ecm_forward.ecm_qwen2 import enable_qwen2_ecm_attention
-from ecm.method.ecm_forward.ecm_gemma import enable_gemma_ecm_attention
 
 
 def enable_ecm_attention(model_name, model):
@@ -15,8 +14,6 @@ def enable_ecm_attention(model_name, model):
         enable_mistral_ecm_attention(model)
     elif "qwen" in model_name.lower():
         enable_qwen2_ecm_attention(model)
-    elif "gemma" in model_name.lower():
-        enable_gemma_ecm_attention(model)
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 

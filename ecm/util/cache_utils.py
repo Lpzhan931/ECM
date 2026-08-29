@@ -24,7 +24,7 @@ def apply_rotary_pos_emb_single_withpos(e, cos, sin, position_ids, unsqueeze_dim
 class CompressCache(DynamicCache):
     def __init__(self) -> None:
         super().__init__()
-        # 增加的 len_cache 记录每一个物理 kv 向量对应压缩前逻辑 kv 向量的数量
+        # Track how many logical pre-compression KV vectors each physical KV vector represents.
         self.len_cache: List[torch.Tensor] = []
 
     def update(
@@ -80,5 +80,4 @@ class CompressCache(DynamicCache):
             legacy_cache += ((self.key_cache[layer_idx], self.value_cache[layer_idx], self.len_cache[layer_idx]),)
         return legacy_cache
     
-
 

@@ -17,10 +17,10 @@ def compute_casual_mask(lens, q_len, start_pos):
     # lens: bs * head_num * seq_len
     lens = lens.to(torch.int32)
     real_pos = (lens.cumsum(dim=-1) - lens[:,:,:1]).unsqueeze(-2) # 1, 1, 1, key_len
-    # 创建一个位置索引矩阵
+    # Create a position-index matrix.
     pos_idx = torch.arange(q_len, device=lens.device).unsqueeze(0).unsqueeze(0).unsqueeze(-1) # 1, 1, q_len, 1
     pos_idx += start_pos
-    # 根据条件赋值
+    # Assign mask values according to the causal condition.
     causal_mask = torch.where(real_pos <= pos_idx, torch.tensor(0.0, device=lens.device), torch.tensor(-1e20, device=lens.device))
     return causal_mask.to(torch.bfloat16)
 

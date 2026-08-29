@@ -62,7 +62,7 @@ def scorer_e(dataset, predictions, answers, lengths, all_classes):
         else:
             scores["8k+"].append(score)
     for key in scores.keys():
-        scores[key] = round(100 * np.mean(scores[key]), 2)
+        scores[key] = round(100 * np.mean(scores[key]), 2) if scores[key] else None
     return scores
 
 def scorer(dataset, predictions, answers, all_classes):
@@ -76,11 +76,25 @@ def scorer(dataset, predictions, answers, all_classes):
         total_score += score
     return round(100 * total_score / len(predictions), 2)
 
+
+group1 = ["narrativeqa", "multifieldqa_en", "qasper"]
+group2 = ["hotpotqa", "2wikimqa", "musique"]
+group3 = ["multi_news", "qmsum", "gov_report"]
+group4 = ["trec", "triviaqa", "samsum"]
+group5 = ["passage_count", "passage_retrieval_en"]
+group6 = ["lcc", "repobench-p"]
+
+
+def calculate_average(group, scores):
+    total = sum(scores[key] for key in group if key in scores)
+    count = sum(1 for key in group if key in scores)
+    return total / count if count > 0 else 0
+
 if __name__ == '__main__':
     args = parse_args()
     scores = dict()
     if args.e:
-        path = f"pred_e/{args.model}/"
+        path = f"pred_e/{args.model}/{args.mode}/"
     else:
         path = f"pred/{args.model}/{args.mode}/"
     all_files = os.listdir(path)
@@ -104,42 +118,33 @@ if __name__ == '__main__':
             score = scorer(dataset, predictions, answers, all_classes)
         scores[dataset] = score
     if args.e:
-        out_path = f"pred_e/{args.model}/result.json"
+        result = {}
+    else:
+        result = {
+            "Single_DocQA": calculate_average(group1, scores),
+            "Multi_DocQA": calculate_average(group2, scores),
+            "Sum": calculate_average(group3, scores),
+            "Few_shot": calculate_average(group4, scores),
+            "Synthetic": calculate_average(group5, scores),
+            "Code": calculate_average(group6, scores),
+        }
+
+    if args.e:
+        out_path = f"pred_e/{args.model}/{args.mode}/result.json"
     else:
         out_path = f"pred/{args.model}/{args.mode}/result.json"
-    with open(out_path, "w") as f:
-        json.dump(scores, f, ensure_ascii=False, indent=4)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {"dataset_scores": scores, "category_averages": result},
+            f,
+            ensure_ascii=False,
+            indent=4,
+            allow_nan=False,
+        )
 
-group1 = ["narrativeqa", "multifieldqa_en", "qasper"]
-group2 = ["hotpotqa", "2wikimqa", "musique"]
-group3 = ["multi_news", "qmsum", "gov_report"]
-group4 = [ "trec", "triviaqa", "samsum"]
-group5 = ["passage_count", "passage_retrieval_en"]
-group6 = ["lcc", "repobench-p"]
-
-# 计算每个分组的平均值
-def calculate_average(group):
-    total = sum(scores[key] for key in group if key in scores)
-    count = sum(1 for key in group if key in scores)
-    return total / count if count > 0 else 0
-
-Single_DocQA = calculate_average(group1)
-Multi_DocQA = calculate_average(group2)
-Sum = calculate_average(group3)
-Few_shot = calculate_average(group4)
-Synthetic = calculate_average(group5)
-Code = calculate_average(group6)
-
-result = {
-    "Single_DocQA": Single_DocQA,
-    "Multi_DocQA": Multi_DocQA,
-    "Sum": Sum,
-    "Few_shot": Few_shot,
-    "Synthetic": Synthetic,
-    "Code": Code
-}
-
-print(f"\n{result['Single_DocQA']:.4f}\t{result['Multi_DocQA']:.4f}\t{result['Sum']:.4f}\t{result['Few_shot']:.4f}\t{result['Synthetic']:.4f}\t{result['Code']:.4f}", file=open(out_path, 'a', encoding="utf-8"))
-print(f"\n{result['Single_DocQA']:.4f}\t{result['Multi_DocQA']:.4f}\t{result['Sum']:.4f}\t{result['Few_shot']:.4f}\t{result['Synthetic']:.4f}\t{result['Code']:.4f}")
-
-
+    if not args.e:
+        print(
+            f"\n{result['Single_DocQA']:.4f}\t{result['Multi_DocQA']:.4f}\t"
+            f"{result['Sum']:.4f}\t{result['Few_shot']:.4f}\t"
+            f"{result['Synthetic']:.4f}\t{result['Code']:.4f}"
+        )

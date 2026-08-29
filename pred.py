@@ -15,8 +15,8 @@ from ecm.method.ecm import enable_ecm_attention, ECMCache
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default="Llama-3.1-8B-Instruct",
-                        choices=["gemma-1.1-2b", "gemma-1.1-7b", "Mistral-7B-Instruct-v0.3",
-                                 "Llama-3.1-8B-Instruct", "Qwen2-7B-Instruct"])
+                        choices=["Mistral-7B-Instruct-v0.3", "Llama-3.1-8B-Instruct",
+                                 "Qwen2-7B-Instruct"])
     parser.add_argument('--e', action='store_true', help="Evaluate on LongBench-E")
     parser.add_argument('--ratio', type=float,
                         help="Compression ratio, length * ratio = recent_size, "
@@ -37,9 +37,6 @@ def build_chat(prompt, model_name, tokenizer):
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": prompt},
         ]
-        prompt = tokenizer.apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
-    elif "gemma" in model_name:
-        chat = [{"role": "user", "content": prompt}]
         prompt = tokenizer.apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
     return prompt
 
@@ -204,6 +201,7 @@ def get_pred(model, tokenizer, rank, world_size, data_all, max_gen, prompt_forma
 if __name__ == '__main__':
     seed_everything(42)
     args = parse_args()
+    # NOTE: This prediction pipeline has only been validated in single-process execution.
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     if world_size > 1:

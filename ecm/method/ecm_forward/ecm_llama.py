@@ -29,11 +29,11 @@ cumsum_pos = True
 
 def compute_casual_mask(lens, q_len, start_pos):
     # lens: bs * head_num * seq_len
-    lens = lens.to(torch.int32) # (bs, H, s_kv) 表示每个物理 kv 向量对应几个逻辑 kv 向量
-    real_pos = (lens.cumsum(dim=-1) - lens[:,:,:1]).unsqueeze(-2) # 1, 1, 1, key_len   实际上是 (bs, H, 1, s_kv) k 向量的绝对逻辑位置
+    lens = lens.to(torch.int32) # (bs, H, s_kv): number of logical KV vectors represented by each physical KV vector
+    real_pos = (lens.cumsum(dim=-1) - lens[:,:,:1]).unsqueeze(-2) # Shape: (bs, H, 1, s_kv); absolute logical positions of key vectors
     pos_idx = torch.arange(q_len, device=lens.device).unsqueeze(0).unsqueeze(0).unsqueeze(-1) # 1, 1, q_len, 1
-    pos_idx += start_pos    # q 向量的绝对逻辑位置
-    # 广播后形状为 (bs, H, q_len, s_kv), 每一个 q 绝对位置大于等于 k 绝对位置的地方设为 0.0 其他地方设为 -1e20
+    pos_idx += start_pos    # Absolute logical positions of query vectors
+    # Broadcast to (bs, H, q_len, s_kv): use 0.0 where a query is at or after a key, and -1e20 otherwise.
     causal_mask = torch.where(real_pos <= pos_idx, torch.tensor(0.0, device=lens.device), torch.tensor(-1e20, device=lens.device))
     return causal_mask.to(torch.bfloat16)
 
@@ -78,21 +78,21 @@ def llama_pos_shift_attention_ecm_forward_442(
     key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
     value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
-    # full_len 记录了 cache 中的逻辑长度, 注意逻辑长度指的是如果不压缩会有多长, cache 的实际长度是物理长度
+    # full_len tracks the logical cache length without compression; the actual cache length is the physical length.
     full_len = key_states.shape[-2]     # q_len
-    past_len = 0    # past_key_values 的逻辑长度
+    past_len = 0    # Logical length of past_key_values
     if past_key_value is not None and len(past_key_value.key_cache) > self.layer_idx:
         if cumsum_pos:
-            # 如果启用了缓存压缩, 逻辑长度不等于物理长度, 用每个 key 向量的 len_cache 累加可得到逻辑长度
-            # past_key_value.len_cache 记录了每个压缩后的 KV 向量实际上代表了几个原始 Token
+            # With cache compression, logical and physical lengths differ; summing len_cache yields the logical length.
+            # past_key_value.len_cache records how many original tokens each compressed KV vector represents.
             past_len = int(past_key_value.len_cache[self.layer_idx][0,0,:].long().sum())
         else:
-            # 如果未用缓存压缩, 逻辑长度等于物理长度
+            # Without cache compression, the logical length equals the physical length.
             past_len = past_key_value.key_cache[self.layer_idx].shape[-2]
     else:
         past_len = 0
     
-    # cache 的逻辑长度 (past_len + q_len), kv 向量的逻辑数量
+    # Logical cache length (past_len + q_len), i.e., the logical number of KV vectors.
     full_len += past_len
 
     # if full_len>4000:
@@ -105,36 +105,36 @@ def llama_pos_shift_attention_ecm_forward_442(
         "removed and `position_embeddings` will be mandatory."
     )
 
-    # 新得到的 q_len 个 q 向量的位置编码应该用逻辑位置, 从 past_len 到 full_len-1
+    # Use logical positions from past_len to full_len - 1 for the q_len new query vectors.
     query_position_ids = torch.arange(past_len, full_len, device=position_ids.device, dtype=torch.long).unsqueeze(0).expand(bsz, -1)
     
-    # 为 key 向量 (包含压缩后的 past 以及新生成的 q_len 个) 计算位置编码
-    # 每个物理 key 向量对应压缩前的多个逻辑 key 向量
+    # Compute positions for compressed past keys and q_len newly generated keys.
+    # Each physical key vector may represent multiple logical pre-compression key vectors.
     if past_key_value is not None and len(past_key_value.key_cache) > self.layer_idx:
         if cumsum_pos:
-            # q_len 部分的 key 的位置编码和 query 一致, past 部分的物理 key 向量的位置编码有多种求法
-            # 假如 past 部分有 4 个 key 向量, len_cache 分别为 2, 3, 1, 2, 累计得到 2, 5, 6, 8, (q_len 部分位置编码从 8 开始)
-            # [method 1] 累计值减去首个位置的长度, 比如累计值 2, 5, 6, 8，那么这4个 key 向量的位置编码为 0, 3, 4, 6 (, 8)
+            # New keys use the same positions as queries; several position schemes are possible for compressed past keys.
+            # For example, four past keys with len_cache [2, 3, 1, 2] have cumulative lengths [2, 5, 6, 8], and new positions start at 8.
+            # [Method 1] Subtract the first length from the cumulative values, yielding key positions [0, 3, 4, 6] (, 8).
             key_position_ids = torch.cat((past_key_value.len_cache[self.layer_idx][:,0,:].long().cumsum(dim=-1) - past_key_value.len_cache[self.layer_idx][:,0,0].long().unsqueeze(-1), query_position_ids), dim=1) # bs * seq_len
             
-            # [method 2] 按照其对应的压缩前的一组逻辑 key 向量位置的最小值, 例如累计值 2, 5, 6, 8 对应 0, 2, 5, 6 (, 8)
+            # [Method 2] Use the minimum original logical position represented by each key: [0, 2, 5, 6] (, 8).
             # key_position_ids = torch.cat((torch.zeros_like(past_key_value.len_cache[self.layer_idx][:,0,:1],dtype=torch.long), past_key_value.len_cache[self.layer_idx][:,0,:-1].long().cumsum(dim=-1), query_position_ids), dim=1)
             
-            # [method 3] 直接按物理位置, 例如直接对应 0, 1, 2, 3 (, 8)
+            # [Method 3] Use physical positions directly: [0, 1, 2, 3] (, 8).
             # key_position_ids = torch.arange(past_key_value.len_cache[self.layer_idx].shape[2]+q_len, device=position_ids.device).unsqueeze(0)
         else:
             key_position_ids = torch.arange(full_len, device=position_ids.device).unsqueeze(0)
     else:
         key_position_ids = torch.arange(full_len, device=position_ids.device).unsqueeze(0)
 
-    # 监控器
-    # value_states 只用来提供 device 和 dtype
+    # Compute rotary embeddings.
+    # value_states is used only to provide the device and dtype.
     cos_query, sin_query = self.rotary_emb(value_states, query_position_ids)
     query_states = apply_rotary_pos_emb_single(query_states, cos_query, sin_query)
-    # CompressCache 类型的 past_key_values 中的每一层都是 (key, value, len)
+    # Each layer in a CompressCache stores (key, value, length).
     len_states = torch.ones((key_states.shape[0], key_states.shape[1], q_len), device=key_states.device, dtype=key_states.dtype)
     if past_key_value is not None:
-        # 和源代码相比，改为存没有rotate过的 key (是不是因为后续压缩时位置编码可能变化?)
+        # Unlike the original implementation, store unrotated keys because positions may change after compression.
         # sin and cos are specific to RoPE models; cache_position needed for the static cache
         key_states, value_states, len_states = past_key_value.update(key_states, value_states, len_states, self.layer_idx)
     cos_key, sin_key = self.rotary_emb(value_states, key_position_ids)
@@ -154,10 +154,10 @@ def llama_pos_shift_attention_ecm_forward_442(
         attn_weights = attn_weights + causal_mask
 
     # upcast attention to fp32
-    # 用exp函数和sum函数手动实现softmax
+    # Implement softmax explicitly with exp and sum.
     attn_weights = torch.exp(attn_weights.to(torch.float32))
-    # NOTE 这里分母用 len_states 修正了, 保持压缩前后分母不变
-    # 分子没有修正的原因是, attn_weights 后面要和压缩后的 value 相乘, 压缩后的 value 是合并前多个 value 的和而不是平均值
+    # Correct the denominator with len_states so it remains unchanged by compression.
+    # The numerator needs no correction because compressed values are sums, rather than averages, of the original values.
     attn_weights = attn_weights /(attn_weights* len_states.unsqueeze(-2)).sum(dim=-1, keepdim=True)
     attn_weights = attn_weights.to(query_states.dtype)
 
@@ -190,9 +190,9 @@ def llama_pos_shift_attention_ecm_forward_442(
     return attn_output, attn_weights, past_key_value
 
 
-# # 没有用到, 还是用的 self.rotary_emb
+# # Unused; self.rotary_emb is used instead.
 # def LlamaRotaryEmbedding_forward(self, x, position_ids):
-#     #对l的最后一位做累加
+#     # Accumulate over the last dimension of l.
 
 #     this_len = int(position_ids.view(-1).max() + 1)
 #     if this_len > self.max_seq_len_cached:
@@ -272,7 +272,7 @@ def LlamaModel_forward(
 
     return_legacy_cache = False
     if (
-        use_cache and not isinstance(past_key_values, Cache) # and not self.training  注意，这里让training时也初始化cache
+        use_cache and not isinstance(past_key_values, Cache) # and not self.training; this also initializes the cache during training
     ):  # kept for BC (non `Cache` `past_key_values` inputs)
         return_legacy_cache = True
         ###
@@ -358,4 +358,3 @@ def LlamaModel_forward(
         hidden_states=all_hidden_states,
         attentions=all_self_attns,
     )
-
